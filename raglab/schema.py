@@ -14,3 +14,5 @@ class RetrievedChunk:
     source: str
     relevance: float
     metadata: dict[str, Any]
+    chunk_id: str = ""
+    retrieval_method: str = "vector"

@@ -13,6 +13,7 @@ from rich.console import Console
 
 from raglab.chunking import chunk_text
 from raglab.prompting import build_system_prompt, format_context
+from raglab.retrieval import BM25Retriever, CorpusDocument, reciprocal_rank_fusion
 from raglab.schema import RetrievedChunk
 
 load_dotenv()
@@ -28,12 +29,14 @@ class DocumentQAAgent:
         collection_name: str = "documents",
         embedding_model: str = "text-embedding-3-small",
         chat_model: str = "gpt-4.1",
+        retrieval_mode: str = "hybrid",
         client: OpenAI | None = None,
         console: Console | None = None,
     ) -> None:
         self.name = name
         self.embedding_model = embedding_model
         self.chat_model = chat_model
+        self.retrieval_mode = retrieval_mode
         self.client = client or OpenAI()
         self.console = console or Console()
 
@@ -46,7 +49,8 @@ class DocumentQAAgent:
 
         count = self.collection.count()
         self.console.print(
-            f"[dim]{name} started, knowledge base contains {count} chunks[/dim]"
+            f"[dim]{name} started, knowledge base contains {count} chunks "
+            f"(retrieval={retrieval_mode})[/dim]"
         )
 
     def add_text(
@@ -74,6 +78,7 @@ class DocumentQAAgent:
             metadatas=[
                 {
                     "source": source,
+                    "chunk_id": ids[index],
                     "chunk_index": index,
                     "added_at": dt.datetime.now().isoformat(),
                 }
@@ -118,6 +123,22 @@ class DocumentQAAgent:
         if self.collection.count() == 0:
             return []
 
+        if self.retrieval_mode == "vector":
+            return self._retrieve_vector(query, n=n)
+        if self.retrieval_mode == "bm25":
+            return self._retrieve_bm25(query, n=n)
+        if self.retrieval_mode == "hybrid":
+            return self._retrieve_hybrid(query, n=n)
+
+        raise ValueError(
+            "retrieval_mode must be one of: vector, bm25, hybrid"
+        )
+
+    def _retrieve_vector(self, query: str, n: int = 5) -> list[RetrievedChunk]:
+        """Retrieve chunks with dense vector search."""
+        if self.collection.count() == 0:
+            return []
+
         response = self.client.embeddings.create(
             input=query.replace("\n", " "),
             model=self.embedding_model,
@@ -132,7 +153,8 @@ class DocumentQAAgent:
 
         chunks: list[RetrievedChunk] = []
         if results["documents"] and results["documents"][0]:
-            for document, metadata, distance in zip(
+            for chunk_id, document, metadata, distance in zip(
+                results["ids"][0],
                 results["documents"][0],
                 results["metadatas"][0],
                 results["distances"][0],
@@ -144,11 +166,44 @@ class DocumentQAAgent:
                             content=document,
                             source=metadata.get("source", "Unknown"),
                             relevance=round(relevance, 3),
-                            metadata=metadata,
+                            metadata={**metadata, "vector_relevance": relevance},
+                            chunk_id=chunk_id,
+                            retrieval_method="vector",
                         )
                     )
 
         return chunks
+
+    def _retrieve_bm25(self, query: str, n: int = 5) -> list[RetrievedChunk]:
+        """Retrieve chunks with lexical BM25 search."""
+        documents = self._load_corpus_documents()
+        return BM25Retriever(documents).search(query, top_k=n)
+
+    def _retrieve_hybrid(self, query: str, n: int = 5) -> list[RetrievedChunk]:
+        """Retrieve chunks with vector search, BM25, and RRF fusion."""
+        candidate_count = min(max(n * 4, 10), self.collection.count())
+        vector_chunks = self._retrieve_vector(query, n=candidate_count)
+        bm25_chunks = self._retrieve_bm25(query, n=candidate_count)
+        return reciprocal_rank_fusion([vector_chunks, bm25_chunks], top_k=n)
+
+    def _load_corpus_documents(self) -> list[CorpusDocument]:
+        """Load stored Chroma chunks into a lexical-search corpus."""
+        results = self.collection.get(include=["documents", "metadatas"])
+        documents: list[CorpusDocument] = []
+        for chunk_id, content, metadata in zip(
+            results["ids"],
+            results["documents"],
+            results["metadatas"],
+        ):
+            documents.append(
+                CorpusDocument(
+                    chunk_id=chunk_id,
+                    content=content,
+                    source=metadata.get("source", "Unknown"),
+                    metadata={**metadata, "chunk_id": chunk_id},
+                )
+            )
+        return documents
 
     def ask(self, question: str) -> str:
         """Answer a question using retrieved document context."""
