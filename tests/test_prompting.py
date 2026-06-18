@@ -29,6 +29,23 @@ class PromptingTests(unittest.TestCase):
         self.assertIn("[Reference Documents]", prompt)
         self.assertIn("reference context", prompt)
 
+    def test_format_context_includes_matched_child_when_parent_expanded(self):
+        chunks = [
+            RetrievedChunk(
+                content="Full parent paragraph.",
+                source="Guide",
+                relevance=0.8,
+                metadata={"matched_child_text": "Small matched chunk."},
+                chunk_id="child-1",
+            )
+        ]
+
+        context = format_context(chunks)
+
+        self.assertIn("Full parent paragraph.", context)
+        self.assertIn("Matched child chunk:", context)
+        self.assertIn("Small matched chunk.", context)
+
 
 if __name__ == "__main__":
     unittest.main()

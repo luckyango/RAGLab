@@ -18,7 +18,7 @@ class TracingTests(unittest.TestCase):
                 content="Python was created by Guido van Rossum.",
                 source="Python Basics",
                 relevance=0.88,
-                metadata={},
+                metadata={"parent_id": "parent-1"},
                 chunk_id="chunk-1",
                 retrieval_method="hybrid+rerank",
             )
@@ -29,6 +29,7 @@ class TracingTests(unittest.TestCase):
         self.assertEqual(len(citations), 1)
         self.assertEqual(citations[0].source, "Python Basics")
         self.assertEqual(citations[0].chunk_id, "chunk-1")
+        self.assertEqual(citations[0].parent_id, "parent-1")
         self.assertEqual(citations[0].retrieval_method, "hybrid+rerank")
         self.assertIn("Guido", citations[0].quote)
 

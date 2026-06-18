@@ -27,6 +27,7 @@ class Citation:
     quote: str
     relevance: float
     retrieval_method: str
+    parent_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class RetrievalTrace:
     reranker: str
     context: str
     retrieved_chunks: list[RetrievedChunk]
+    context_chunks: list[RetrievedChunk]
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,9 @@ def format_context(chunks: list[RetrievedChunk], limit: int = 3) -> str:
             f"Retrieval: {chunk.retrieval_method}, Relevance: {chunk.relevance})\n"
             f"{chunk.content}"
         )
+        child_text = chunk.metadata.get("matched_child_text")
+        if child_text:
+            context_parts[-1] += f"\n\nMatched child chunk:\n{child_text}"
     return "\n\n".join(context_parts)
 
 

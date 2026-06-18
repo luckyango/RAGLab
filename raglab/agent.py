@@ -13,6 +13,7 @@ from openai import OpenAI
 from rich.console import Console
 
 from raglab.chunking import ChunkingConfig, chunk_source_document
+from raglab.context import expand_parent_context
 from raglab.ingestion import IngestionError, SourceDocument, load_documents
 from raglab.prompting import build_system_prompt, format_context
 from raglab.reranking import Reranker, build_reranker
@@ -281,10 +282,12 @@ class DocumentQAAgent:
                     reranker=self.reranker.__class__.__name__,
                     context="",
                     retrieved_chunks=[],
+                    context_chunks=[],
                 ),
             )
 
-        context = format_context(chunks)
+        context_chunks = expand_parent_context(chunks)
+        context = format_context(context_chunks)
         messages = [
             {
                 "role": "system",
@@ -313,5 +316,6 @@ class DocumentQAAgent:
                 reranker=self.reranker.__class__.__name__,
                 context=context,
                 retrieved_chunks=chunks,
+                context_chunks=context_chunks,
             ),
         )

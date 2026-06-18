@@ -31,6 +31,7 @@ def build_citations(
                 quote=excerpt(chunk.content, max_chars=quote_chars),
                 relevance=chunk.relevance,
                 retrieval_method=chunk.retrieval_method,
+                parent_id=str(chunk.metadata.get("parent_id", "")),
             )
         )
     return citations
