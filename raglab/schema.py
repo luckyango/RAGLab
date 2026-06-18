@@ -35,6 +35,8 @@ class RetrievalTrace:
     """Trace data for inspecting a RAG answer."""
 
     query: str
+    query_mode: str
+    generated_queries: list[str]
     retrieval_mode: str
     reranker: str
     context: str

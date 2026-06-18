@@ -16,6 +16,7 @@ from raglab.chunking import ChunkingConfig, chunk_source_document
 from raglab.context import expand_parent_context
 from raglab.ingestion import IngestionError, SourceDocument, load_documents
 from raglab.prompting import build_system_prompt, format_context
+from raglab.query_transform import QueryTransformer, build_query_transformer
 from raglab.reranking import Reranker, build_reranker
 from raglab.retrieval import BM25Retriever, CorpusDocument, reciprocal_rank_fusion
 from raglab.schema import RAGAnswer, RetrievalTrace, RetrievedChunk
@@ -35,6 +36,7 @@ class DocumentQAAgent:
         embedding_model: str = "text-embedding-3-small",
         chat_model: str = "gpt-4.1",
         retrieval_mode: str = "hybrid",
+        query_mode: str | QueryTransformer | None = "original",
         reranker: str | Reranker | None = "lexical",
         client: OpenAI | None = None,
         console: Console | None = None,
@@ -43,6 +45,7 @@ class DocumentQAAgent:
         self.embedding_model = embedding_model
         self.chat_model = chat_model
         self.retrieval_mode = retrieval_mode
+        self.query_transformer = build_query_transformer(query_mode)
         self.reranker = (
             reranker if isinstance(reranker, Reranker) else build_reranker(reranker)
         )
@@ -59,7 +62,8 @@ class DocumentQAAgent:
         count = self.collection.count()
         self.console.print(
             f"[dim]{name} started, knowledge base contains {count} chunks "
-            f"(retrieval={retrieval_mode}, reranker={reranker or 'none'})[/dim]"
+            f"(query={self.query_transformer.mode}, retrieval={retrieval_mode}, "
+            f"reranker={reranker or 'none'})[/dim]"
         )
 
     def add_text(
@@ -171,21 +175,48 @@ class DocumentQAAgent:
 
     def retrieve(self, query: str, n: int = 5) -> list[RetrievedChunk]:
         """Retrieve relevant chunks for a query."""
+        transform = self.query_transformer.transform(query)
+        return self._retrieve_transformed(query, transform.queries, n=n)
+
+    def _retrieve_transformed(
+        self,
+        rerank_query: str,
+        retrieval_queries: list[str],
+        n: int = 5,
+    ) -> list[RetrievedChunk]:
+        """Retrieve for one or more transformed queries."""
         if self.collection.count() == 0:
             return []
 
-        if self.retrieval_mode == "vector":
-            chunks = self._retrieve_vector(query, n=self._candidate_count(n))
-        elif self.retrieval_mode == "bm25":
-            chunks = self._retrieve_bm25(query, n=self._candidate_count(n))
-        elif self.retrieval_mode == "hybrid":
-            chunks = self._retrieve_hybrid(query, n=self._candidate_count(n))
-        else:
+        if self.retrieval_mode not in {"vector", "bm25", "hybrid"}:
             raise ValueError(
                 "retrieval_mode must be one of: vector, bm25, hybrid"
             )
 
-        return self.reranker.rerank(query, chunks, top_k=n)
+        candidate_count = self._candidate_count(n)
+        ranked_lists = [
+            self._retrieve_single_query(query, candidate_count)
+            for query in retrieval_queries
+        ]
+        if len(ranked_lists) == 1:
+            candidates = ranked_lists[0]
+        else:
+            candidates = reciprocal_rank_fusion(
+                ranked_lists,
+                top_k=candidate_count,
+            )
+
+        return self.reranker.rerank(rerank_query, candidates, top_k=n)
+
+    def _retrieve_single_query(self, query: str, n: int) -> list[RetrievedChunk]:
+        """Retrieve candidates for a single retrieval query."""
+        if self.retrieval_mode == "vector":
+            return self._retrieve_vector(query, n=n)
+        if self.retrieval_mode == "bm25":
+            return self._retrieve_bm25(query, n=n)
+        if self.retrieval_mode == "hybrid":
+            return self._retrieve_hybrid(query, n=n)
+        raise ValueError("retrieval_mode must be one of: vector, bm25, hybrid")
 
     def _retrieve_vector(self, query: str, n: int = 5) -> list[RetrievedChunk]:
         """Retrieve chunks with dense vector search."""
@@ -267,7 +298,11 @@ class DocumentQAAgent:
 
     def ask_with_trace(self, question: str) -> RAGAnswer:
         """Answer a question and return citations plus retrieval trace."""
-        chunks = self.retrieve(question)
+        query_transform = self.query_transformer.transform(question)
+        chunks = self._retrieve_transformed(
+            question,
+            query_transform.queries,
+        )
         if not chunks:
             answer = (
                 "Sorry, no relevant information was found in my knowledge base. "
@@ -278,6 +313,8 @@ class DocumentQAAgent:
                 citations=[],
                 trace=RetrievalTrace(
                     query=question,
+                    query_mode=query_transform.mode,
+                    generated_queries=query_transform.queries,
                     retrieval_mode=self.retrieval_mode,
                     reranker=self.reranker.__class__.__name__,
                     context="",
@@ -312,6 +349,8 @@ class DocumentQAAgent:
             citations=build_citations(chunks),
             trace=RetrievalTrace(
                 query=question,
+                query_mode=query_transform.mode,
+                generated_queries=query_transform.queries,
                 retrieval_mode=self.retrieval_mode,
                 reranker=self.reranker.__class__.__name__,
                 context=context,
