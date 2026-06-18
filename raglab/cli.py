@@ -53,7 +53,7 @@ def main() -> None:
             f"Knowledge base contains {len(SAMPLE_DOCS)} sample topics\n\n"
             "Commands:\n"
             "  sources -> View knowledge base sources\n"
-            "  add <file_path> -> Add a UTF-8 text file\n"
+            "  add <file_path> -> Add txt, md, html, pdf, or docx\n"
             "  quit -> Exit",
             title="System Startup",
             border_style="blue",

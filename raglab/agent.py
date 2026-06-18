@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from pathlib import Path
+from typing import Any
 
 import chromadb
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from openai import OpenAI
 from rich.console import Console
 
 from raglab.chunking import chunk_text
+from raglab.ingestion import IngestionError, SourceDocument, load_documents
 from raglab.prompting import build_system_prompt, format_context
 from raglab.reranking import Reranker, build_reranker
 from raglab.retrieval import BM25Retriever, CorpusDocument, reciprocal_rank_fusion
@@ -64,53 +66,94 @@ class DocumentQAAgent:
         text: str,
         source: str = "manual",
         chunk_size: int = 400,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         """Add text to the vector knowledge base and return chunk count."""
-        chunks = chunk_text(text, chunk_size=chunk_size)
-        if not chunks:
+        document = SourceDocument(
+            text=text,
+            source=source,
+            metadata={"source": source, **(metadata or {})},
+        )
+        return self.add_documents([document], chunk_size=chunk_size)
+
+    def add_documents(
+        self,
+        documents: list[SourceDocument],
+        chunk_size: int = 400,
+    ) -> int:
+        """Add loaded source documents to the vector knowledge base."""
+        chunk_records: list[tuple[str, dict[str, str | int | float | bool]]] = []
+        created_at = dt.datetime.now().isoformat()
+
+        for document in documents:
+            chunks = chunk_text(document.text, chunk_size=chunk_size)
+            for index, chunk in enumerate(chunks):
+                chunk_id = str(uuid.uuid4())
+                metadata = {
+                    **document.metadata,
+                    "source": document.source,
+                    "chunk_id": chunk_id,
+                    "chunk_index": index,
+                    "created_at": created_at,
+                    "added_at": created_at,
+                }
+                chunk_records.append((chunk, self._sanitize_metadata(metadata)))
+
+        if not chunk_records:
             return 0
+
+        chunks = [chunk for chunk, _ in chunk_records]
+        metadatas = [metadata for _, metadata in chunk_records]
 
         embeddings_response = self.client.embeddings.create(
             input=chunks,
             model=self.embedding_model,
         )
         embeddings = [item.embedding for item in embeddings_response.data]
+        ids = [str(metadata["chunk_id"]) for metadata in metadatas]
 
-        ids = [str(uuid.uuid4()) for _ in chunks]
         self.collection.add(
             ids=ids,
             documents=chunks,
             embeddings=embeddings,
-            metadatas=[
-                {
-                    "source": source,
-                    "chunk_id": ids[index],
-                    "chunk_index": index,
-                    "added_at": dt.datetime.now().isoformat(),
-                }
-                for index in range(len(chunks))
-            ],
+            metadatas=metadatas,
         )
 
+        sources = sorted({str(metadata["source"]) for metadata in metadatas})
         self.console.print(
-            f"[green]Added {len(chunks)} chunks (Source: {source})[/green]"
+            f"[green]Added {len(chunks)} chunks (Sources: {', '.join(sources)})[/green]"
         )
         return len(chunks)
 
+    @staticmethod
+    def _sanitize_metadata(
+        metadata: dict[str, Any],
+    ) -> dict[str, str | int | float | bool]:
+        """Keep metadata compatible with Chroma's scalar metadata types."""
+        sanitized: dict[str, str | int | float | bool] = {}
+        for key, value in metadata.items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                sanitized[key] = value
+            else:
+                sanitized[key] = str(value)
+        return sanitized
+
     def add_file(self, file_path: str) -> int:
-        """Load a UTF-8 text file and add it to the knowledge base."""
+        """Load a supported file and add it to the knowledge base."""
         path = Path(file_path)
         if not path.exists():
             self.console.print(f"[red]File does not exist: {file_path}[/red]")
             return 0
 
         try:
-            content = path.read_text(encoding="utf-8")
-        except Exception as exc:
+            documents = load_documents(path)
+        except IngestionError as exc:
             self.console.print(f"[red]Load failed: {exc}[/red]")
             return 0
 
-        return self.add_text(content, source=path.name)
+        return self.add_documents(documents)
 
     def list_sources(self) -> list[str]:
         """List unique source names in the knowledge base."""

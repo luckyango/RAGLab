@@ -5,16 +5,11 @@ from __future__ import annotations
 import re
 
 
-SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？.!?])")
+SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[\u3002\uff01\uff1f.!?])")
 
 
 def chunk_text(text: str, chunk_size: int = 400) -> list[str]:
-    """Split text into paragraph-aware chunks.
-
-    This keeps the original baseline behavior but moves it behind a testable
-    function so later chunking strategies can be added without touching the
-    agent orchestration code.
-    """
+    """Split text into paragraph-aware chunks."""
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
 
