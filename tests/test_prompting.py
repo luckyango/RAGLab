@@ -19,6 +19,7 @@ class PromptingTests(unittest.TestCase):
 
         self.assertIn("[Document Chunk 1]", context)
         self.assertIn("Source: Python Basics", context)
+        self.assertIn("Retrieval: vector", context)
         self.assertIn("Relevance: 0.91", context)
 
     def test_system_prompt_contains_grounding_requirements(self):

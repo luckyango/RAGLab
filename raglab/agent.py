@@ -15,7 +15,8 @@ from raglab.chunking import chunk_text
 from raglab.prompting import build_system_prompt, format_context
 from raglab.reranking import Reranker, build_reranker
 from raglab.retrieval import BM25Retriever, CorpusDocument, reciprocal_rank_fusion
-from raglab.schema import RetrievedChunk
+from raglab.schema import RAGAnswer, RetrievalTrace, RetrievedChunk
+from raglab.tracing import build_citations
 
 load_dotenv()
 
@@ -130,16 +131,16 @@ class DocumentQAAgent:
 
         if self.retrieval_mode == "vector":
             chunks = self._retrieve_vector(query, n=self._candidate_count(n))
-        if self.retrieval_mode == "bm25":
+        elif self.retrieval_mode == "bm25":
             chunks = self._retrieve_bm25(query, n=self._candidate_count(n))
-        if self.retrieval_mode == "hybrid":
+        elif self.retrieval_mode == "hybrid":
             chunks = self._retrieve_hybrid(query, n=self._candidate_count(n))
-        if self.retrieval_mode in {"vector", "bm25", "hybrid"}:
-            return self.reranker.rerank(query, chunks, top_k=n)
+        else:
+            raise ValueError(
+                "retrieval_mode must be one of: vector, bm25, hybrid"
+            )
 
-        raise ValueError(
-            "retrieval_mode must be one of: vector, bm25, hybrid"
-        )
+        return self.reranker.rerank(query, chunks, top_k=n)
 
     def _retrieve_vector(self, query: str, n: int = 5) -> list[RetrievedChunk]:
         """Retrieve chunks with dense vector search."""
@@ -217,11 +218,26 @@ class DocumentQAAgent:
 
     def ask(self, question: str) -> str:
         """Answer a question using retrieved document context."""
+        return self.ask_with_trace(question).text
+
+    def ask_with_trace(self, question: str) -> RAGAnswer:
+        """Answer a question and return citations plus retrieval trace."""
         chunks = self.retrieve(question)
         if not chunks:
-            return (
+            answer = (
                 "Sorry, no relevant information was found in my knowledge base. "
                 "Please add relevant documents first."
+            )
+            return RAGAnswer(
+                text=answer,
+                citations=[],
+                trace=RetrievalTrace(
+                    query=question,
+                    retrieval_mode=self.retrieval_mode,
+                    reranker=self.reranker.__class__.__name__,
+                    context="",
+                    retrieved_chunks=[],
+                ),
             )
 
         context = format_context(chunks)
@@ -244,4 +260,14 @@ class DocumentQAAgent:
         self.chat_history.append({"role": "user", "content": question})
         self.chat_history.append({"role": "assistant", "content": answer})
 
-        return answer or ""
+        return RAGAnswer(
+            text=answer or "",
+            citations=build_citations(chunks),
+            trace=RetrievalTrace(
+                query=question,
+                retrieval_mode=self.retrieval_mode,
+                reranker=self.reranker.__class__.__name__,
+                context=context,
+                retrieved_chunks=chunks,
+            ),
+        )

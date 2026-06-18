@@ -8,7 +8,7 @@ from raglab.schema import RetrievedChunk
 SYSTEM_REQUIREMENTS = """Requirements:
 1. Answer based ONLY on the provided reference documents.
 2. If the reference documents do not contain relevant information, state it clearly.
-3. Cite specific sources (e.g., "According to document X...").
+3. Cite specific sources using the provided chunk labels, e.g. [Document Chunk 1].
 4. Keep the answer concise and accurate, avoid fabricating information."""
 
 
@@ -18,7 +18,8 @@ def format_context(chunks: list[RetrievedChunk], limit: int = 3) -> str:
     for index, chunk in enumerate(chunks[:limit], 1):
         context_parts.append(
             f"[Document Chunk {index}] "
-            f"(Source: {chunk.source}, Relevance: {chunk.relevance})\n"
+            f"(Source: {chunk.source}, Chunk ID: {chunk.chunk_id or 'unknown'}, "
+            f"Retrieval: {chunk.retrieval_method}, Relevance: {chunk.relevance})\n"
             f"{chunk.content}"
         )
     return "\n\n".join(context_parts)
