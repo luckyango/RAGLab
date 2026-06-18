@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from rich.console import Console
 
-from raglab.chunking import chunk_text
+from raglab.chunking import ChunkingConfig, chunk_source_document
 from raglab.ingestion import IngestionError, SourceDocument, load_documents
 from raglab.prompting import build_system_prompt, format_context
 from raglab.reranking import Reranker, build_reranker
@@ -84,20 +84,21 @@ class DocumentQAAgent:
         """Add loaded source documents to the vector knowledge base."""
         chunk_records: list[tuple[str, dict[str, str | int | float | bool]]] = []
         created_at = dt.datetime.now().isoformat()
+        chunking_config = ChunkingConfig(chunk_size=chunk_size)
 
         for document in documents:
-            chunks = chunk_text(document.text, chunk_size=chunk_size)
+            chunks = chunk_source_document(document, config=chunking_config)
             for index, chunk in enumerate(chunks):
                 chunk_id = str(uuid.uuid4())
                 metadata = {
-                    **document.metadata,
+                    **chunk.metadata,
                     "source": document.source,
                     "chunk_id": chunk_id,
                     "chunk_index": index,
                     "created_at": created_at,
                     "added_at": created_at,
                 }
-                chunk_records.append((chunk, self._sanitize_metadata(metadata)))
+                chunk_records.append((chunk.text, self._sanitize_metadata(metadata)))
 
         if not chunk_records:
             return 0
