@@ -13,6 +13,7 @@ from rich.console import Console
 
 from raglab.chunking import chunk_text
 from raglab.prompting import build_system_prompt, format_context
+from raglab.reranking import Reranker, build_reranker
 from raglab.retrieval import BM25Retriever, CorpusDocument, reciprocal_rank_fusion
 from raglab.schema import RetrievedChunk
 
@@ -30,6 +31,7 @@ class DocumentQAAgent:
         embedding_model: str = "text-embedding-3-small",
         chat_model: str = "gpt-4.1",
         retrieval_mode: str = "hybrid",
+        reranker: str | Reranker | None = "lexical",
         client: OpenAI | None = None,
         console: Console | None = None,
     ) -> None:
@@ -37,6 +39,9 @@ class DocumentQAAgent:
         self.embedding_model = embedding_model
         self.chat_model = chat_model
         self.retrieval_mode = retrieval_mode
+        self.reranker = (
+            reranker if isinstance(reranker, Reranker) else build_reranker(reranker)
+        )
         self.client = client or OpenAI()
         self.console = console or Console()
 
@@ -50,7 +55,7 @@ class DocumentQAAgent:
         count = self.collection.count()
         self.console.print(
             f"[dim]{name} started, knowledge base contains {count} chunks "
-            f"(retrieval={retrieval_mode})[/dim]"
+            f"(retrieval={retrieval_mode}, reranker={reranker or 'none'})[/dim]"
         )
 
     def add_text(
@@ -124,11 +129,13 @@ class DocumentQAAgent:
             return []
 
         if self.retrieval_mode == "vector":
-            return self._retrieve_vector(query, n=n)
+            chunks = self._retrieve_vector(query, n=self._candidate_count(n))
         if self.retrieval_mode == "bm25":
-            return self._retrieve_bm25(query, n=n)
+            chunks = self._retrieve_bm25(query, n=self._candidate_count(n))
         if self.retrieval_mode == "hybrid":
-            return self._retrieve_hybrid(query, n=n)
+            chunks = self._retrieve_hybrid(query, n=self._candidate_count(n))
+        if self.retrieval_mode in {"vector", "bm25", "hybrid"}:
+            return self.reranker.rerank(query, chunks, top_k=n)
 
         raise ValueError(
             "retrieval_mode must be one of: vector, bm25, hybrid"
@@ -181,10 +188,13 @@ class DocumentQAAgent:
 
     def _retrieve_hybrid(self, query: str, n: int = 5) -> list[RetrievedChunk]:
         """Retrieve chunks with vector search, BM25, and RRF fusion."""
-        candidate_count = min(max(n * 4, 10), self.collection.count())
-        vector_chunks = self._retrieve_vector(query, n=candidate_count)
-        bm25_chunks = self._retrieve_bm25(query, n=candidate_count)
+        vector_chunks = self._retrieve_vector(query, n=n)
+        bm25_chunks = self._retrieve_bm25(query, n=n)
         return reciprocal_rank_fusion([vector_chunks, bm25_chunks], top_k=n)
+
+    def _candidate_count(self, n: int) -> int:
+        """Use a wider candidate pool before reranking."""
+        return min(max(n * 4, 10), self.collection.count())
 
     def _load_corpus_documents(self) -> list[CorpusDocument]:
         """Load stored Chroma chunks into a lexical-search corpus."""
